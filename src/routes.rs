@@ -26,6 +26,20 @@ async fn link_creation_api(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateRequest>,
 ) -> impl IntoResponse {
+
+    let host = match url::Url::parse(&payload.long_url){
+        Ok(url) => url.host_str().map(|s| s.to_string()),
+        Err(_) => {
+            return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid URL format." }))));
+        },
+    };
+    if host.is_none() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid URL format." }))));
+    }
+    if state.blocklist.contains(&host.unwrap()) {
+        return Err((StatusCode::FORBIDDEN, Json(json!({ "error": "This URL is blocked." }))));
+    }
+
     let result = match sqlx::query!("INSERT INTO l_counter DEFAULT VALUES")
         .execute(&state.db)
         .await

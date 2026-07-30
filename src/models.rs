@@ -1,9 +1,12 @@
+use std::collections::HashSet;
+
 use chrono::NaiveDateTime;
 use sqlx::{SqlitePool, prelude::FromRow};
 
 pub struct AppState{
     pub db: SqlitePool,
-    pub sqids: sqids::Sqids
+    pub sqids: sqids::Sqids,
+    pub blocklist: HashSet<String>
 }
 
 #[derive(Debug, FromRow)]
