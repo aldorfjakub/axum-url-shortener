@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use sqids::Sqids;
 
 use crate::models::AppState;
 
@@ -10,7 +10,8 @@ mod routes;
 #[tokio::main]
 async fn main() {
     let db =  db::initialize_database().await;
-    let state = AppState{db};
+    let sqids = Sqids::builder().min_length(4).alphabet("pgQHqibXSKe4N06t7sPD3IuZc8C9EmylzjGMaVJFBWOR21wnoUYf5LxArhvkTd".chars().collect()).build().expect("Failed to create Sqids instance");
+    let state = AppState{db,sqids};
 
     let app = routes::app_routes(state);
 

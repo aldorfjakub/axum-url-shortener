@@ -40,8 +40,16 @@ async fn link_creation_api(
         }
     };
     let inserted_id = result.last_insert_rowid();
-    let sqids = Sqids::default();
-    let slug = sqids.encode(&[inserted_id as u64]).unwrap();
+    let slug = match state.sqids.encode(&[inserted_id as u64]) {
+        Ok(s) => s,
+        Err(err) => {
+            println!("Error encoding slug: {}", err);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Failed to create short link." })),
+            ));
+        }
+    };
     let result = sqlx::query!(
         "INSERT INTO links (slug, original_url) VALUES (?, ?)",
         slug,

@@ -2,7 +2,8 @@ use chrono::NaiveDateTime;
 use sqlx::{SqlitePool, prelude::FromRow};
 
 pub struct AppState{
-    pub db: SqlitePool
+    pub db: SqlitePool,
+    pub sqids: sqids::Sqids
 }
 
 #[derive(Debug, FromRow)]
