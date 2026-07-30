@@ -26,22 +26,38 @@ async fn link_creation_api(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateRequest>,
 ) -> impl IntoResponse {
-
-    let host = match url::Url::parse(&payload.long_url){
+    let host = match url::Url::parse(&payload.long_url) {
         Ok(url) => url.host_str().map(|s| s.to_string()),
         Err(_) => {
-            return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid URL format." }))));
-        },
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "Invalid URL format." })),
+            ));
+        }
     };
     if host.is_none() {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid URL format." }))));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid URL format." })),
+        ));
     }
     if state.blocklist.contains(&host.unwrap()) {
-        return Err((StatusCode::FORBIDDEN, Json(json!({ "error": "This URL is blocked." }))));
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "This URL is blocked." })),
+        ));
     }
 
+    let mut tx = state.db.begin().await.map_err(|err| {
+        println!("Error starting transaction: {}", err);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Failed to create short link." })),
+        )
+    })?;
+
     let result = match sqlx::query!("INSERT INTO l_counter DEFAULT VALUES")
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await
     {
         Ok(res) => res,
@@ -64,38 +80,47 @@ async fn link_creation_api(
             ));
         }
     };
-    let result = sqlx::query!(
+    let _ = sqlx::query!(
         "INSERT INTO links (slug, original_url) VALUES (?, ?)",
         slug,
         payload.long_url
     )
-    .execute(&state.db)
-    .await;
+    .execute(&mut *tx)
+    .await
+    .map_err(|err| {
+        println!("Error inserting into links: {}", err);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Failed to create short link." })),
+        )
+    })?;
 
+    tx.commit().await.map_err(|err| {
+        println!("Error committing transaction: {}", err);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "Failed to create short link." })),
+        )
+    })?;
+
+    Ok(Json(json!({ "slug": slug })))
+}
+
+async fn link_redirect(
+    State(state): State<Arc<AppState>>,
+    Path(short): Path<String>,
+) -> impl IntoResponse {
+    let result = sqlx::query!("SELECT original_url FROM links WHERE slug = ?", short)
+        .fetch_one(&state.db)
+        .await;
     match result {
-        Ok(_) => {
+        Ok(record) => {
             return Ok((
-                StatusCode::OK,
-                Json(json!({
-                    "slug" : slug
-                })),
+                StatusCode::FOUND,
+                axum::response::Redirect::to(&record.original_url),
             ));
         }
         Err(err) => {
-            println!("Error inserting into links: {}", err);
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Failed to create short link." })),
-            ));
-        }
-    }
-}
-
-async fn link_redirect(State(state): State<Arc<AppState>>, Path(short): Path<String>) -> impl IntoResponse {
-    let result = sqlx::query!("SELECT original_url FROM links WHERE slug = ?", short).fetch_one(&state.db).await;
-    match result {
-        Ok (record) => return Ok((StatusCode::FOUND, axum::response::Redirect::to(&record.original_url))),
-        Err (err) => {
             println!("Error fetching original_url: {}", err);
             return Err((
                 StatusCode::NOT_FOUND,
