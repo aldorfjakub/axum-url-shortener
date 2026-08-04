@@ -1,15 +1,20 @@
-use std::sync::Arc;
-
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+};
 use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    response::{Html, IntoResponse},
+    response::{Html, IntoResponse, Redirect},
     routing::{get, post},
+};
+use axum_extra::extract::{
+    PrivateCookieJar,
+    cookie::{Cookie},
 };
 use serde::Deserialize;
 use serde_json::json;
-use sqids::Sqids;
 
 use crate::models::AppState;
 
@@ -20,10 +25,16 @@ async fn index() -> impl IntoResponse {
 #[derive(Deserialize)]
 pub struct CreateRequest {
     pub long_url: String,
+    pub slug: Option<String>,
+    pub password: Option<String>,
+}
+#[derive(Deserialize)]
+pub struct PasswordVerifyRequest {
+    pub password: String,
 }
 
 async fn link_creation_api(
-    State(state): State<Arc<AppState>>,
+    State(state): State<AppState>,
     Json(payload): Json<CreateRequest>,
 ) -> impl IntoResponse {
     let host = match url::Url::parse(&payload.long_url) {
@@ -46,6 +57,60 @@ async fn link_creation_api(
             StatusCode::FORBIDDEN,
             Json(json!({ "error": "This URL is blocked." })),
         ));
+    }
+
+    let pass_hash: Option<String> = match payload.password {
+        Some(pass) => {
+            let salt = SaltString::generate(&mut OsRng);
+            let argon2 = Argon2::default();
+            let password_hash = argon2
+                .hash_password(pass.as_bytes(), &salt)
+                .unwrap()
+                .to_string();
+            Some(password_hash)
+        }
+        None => None,
+    };
+
+    if payload.slug.is_some() {
+        let custom_slug = payload.slug.as_ref().unwrap();
+
+        // This leaves around 2 billion possible combinations, which should be enough for a small project like this.
+        if custom_slug.len() < 7 {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "Custom slug must be at least 7 characters long." })),
+            ));
+        } else if custom_slug.len() > 20 {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "Custom slug must be at most 20 characters long." })),
+            ));
+        } else if !custom_slug.chars().all(|c| c.is_alphanumeric() || c == '-') {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(
+                    json!({ "error": "Custom slug can only contain alphanumeric characters and dashes." }),
+                ),
+            ));
+        }
+
+        let _ = sqlx::query!(
+            "INSERT INTO links (slug, original_url, password_hash) VALUES (?, ?, ?)",
+            custom_slug,
+            payload.long_url,
+            pass_hash
+        )
+        .execute(&state.db)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "Custom slug is already taken." })),
+            )
+        })?;
+
+        return Ok(Json(json!({ "slug": custom_slug })));
     }
 
     let mut tx = state.db.begin().await.map_err(|err| {
@@ -81,9 +146,10 @@ async fn link_creation_api(
         }
     };
     let _ = sqlx::query!(
-        "INSERT INTO links (slug, original_url) VALUES (?, ?)",
+        "INSERT INTO links (slug, original_url, password_hash) VALUES (?, ?, ?)",
         slug,
-        payload.long_url
+        payload.long_url,
+        pass_hash
     )
     .execute(&mut *tx)
     .await
@@ -107,19 +173,18 @@ async fn link_creation_api(
 }
 
 async fn link_redirect(
-    State(state): State<Arc<AppState>>,
+    State(state): State<AppState>,
     Path(short): Path<String>,
+    jar: PrivateCookieJar,
 ) -> impl IntoResponse {
-    let result = sqlx::query!("SELECT original_url FROM links WHERE slug = ?", short)
-        .fetch_one(&state.db)
-        .await;
-    match result {
-        Ok(record) => {
-            return Ok((
-                StatusCode::FOUND,
-                axum::response::Redirect::to(&record.original_url),
-            ));
-        }
+    let result = sqlx::query!(
+        "SELECT original_url, password_hash FROM links WHERE slug = ?",
+        short
+    )
+    .fetch_one(&state.db)
+    .await;
+    let record = match result {
+        Ok(record) => record,
         Err(err) => {
             println!("Error fetching original_url: {}", err);
             return Err((
@@ -127,14 +192,90 @@ async fn link_redirect(
                 Json(json!({ "error": "Short link not found." })),
             ));
         }
+    };
+
+    let authorized = match jar.get(&short) {
+        Some(cookie) => cookie
+            .value()
+            .parse::<i64>()
+            .map(|expiry| chrono::Utc::now().timestamp() < expiry)
+            .unwrap_or(false),
+        None => false,
+    };
+
+    if record.password_hash.is_some() && !authorized {
+        return Ok((
+            StatusCode::OK,
+            Html(include_str!("../html/password-input.html")),
+        )
+            .into_response());
     }
+
+    Ok(Redirect::to(&record.original_url).into_response())
+}
+
+async fn password_verify(
+    State(state): State<AppState>,
+    Path(short): Path<String>,
+    jar: PrivateCookieJar,
+    Json(payload): Json<PasswordVerifyRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let record = match sqlx::query!(
+        "SELECT original_url, password_hash FROM links WHERE slug = ?",
+        short
+    )
+    .fetch_one(&state.db)
+    .await
+    {
+        Ok(record) => record,
+        Err(_) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Short link not found." })),
+            ));
+        }
+    };
+
+    let Some(hash) = record.password_hash else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "This link is not password protected." })),
+        ));
+    };
+
+    let argon2 = Argon2::default();
+    let valid = argon2
+        .verify_password(
+            payload.password.as_bytes(),
+            &PasswordHash::new(&hash).unwrap(),
+        )
+        .is_ok();
+
+    if !valid {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "Invalid password." })),
+        ));
+    }
+
+    // Issue cookie with a 5-minute expiry
+    let expiry = chrono::Utc::now().timestamp() + 300;
+    let cookie = Cookie::build((short.clone(), expiry.to_string()))
+        .path("/")
+        .http_only(true)
+        .secure(false)
+        .same_site(axum_extra::extract::cookie::SameSite::Strict)
+        .build();
+    let jar = jar.add(cookie);
+
+    Ok((jar, Json(json!({ "success": true, "slug": short }))).into_response())
 }
 
 pub fn app_routes(state: AppState) -> Router<()> {
-    let state = Arc::new(state);
     let api_routes = Router::new()
         .route("/", get(index))
         .route("/{short}", get(link_redirect))
+        .route("/{short}/verify", post(password_verify))
         .route("/api/shorten", post(link_creation_api))
         .with_state(state);
 

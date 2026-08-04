@@ -1,6 +1,4 @@
-use std::sync::Arc;
-
-use sqlx::{Pool, Sqlite, SqlitePool, migrate::MigrateDatabase};
+use sqlx::{Sqlite, SqlitePool, migrate::MigrateDatabase};
 
 const DB_URL: &str = "sqlite://sqlite.db";
 

@@ -1,8 +1,8 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 use sqids::Sqids;
 
-use crate::models::AppState;
+use crate::models::{AppState, AppStateInner};
 
 
 mod db;
@@ -16,7 +16,7 @@ async fn main() {
 
     let blocklist: HashSet<String> = std::fs::read_to_string("data/blocklist.txt").unwrap().lines().map(|s| s.to_string()).collect();
 
-    let state = AppState{db,sqids, blocklist};
+    let state = AppState(Arc::new (AppStateInner{db,sqids, blocklist, cookie_key : axum_extra::extract::cookie::Key::generate()}));
 
     let app = routes::app_routes(state);
 
