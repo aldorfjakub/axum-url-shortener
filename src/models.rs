@@ -3,6 +3,7 @@ use std::{collections::HashSet, ops::Deref, sync::Arc};
 use axum::extract::FromRef;
 use axum_extra::extract::cookie::Key;
 use chrono::NaiveDateTime;
+use serde::Serialize;
 use sqlx::{SqlitePool, prelude::FromRow};
 
 
@@ -31,10 +32,11 @@ impl Deref for AppState {
     }
 }
 
-#[derive(Debug, FromRow)]
-pub struct LinkRecord{
+#[derive(Debug, FromRow, Serialize)]
+pub struct ClickRecord{
     pub slug: String,
-    pub original_url: String,
-    pub password_hash: Option<String>,
-    pub created_at: NaiveDateTime
+    pub referrer: String,
+    pub user_agent: String,
+    pub ip: String,
+    pub created_at: Option<NaiveDateTime>
 }

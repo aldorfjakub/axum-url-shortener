@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, net::SocketAddr, sync::Arc};
 
 use sqids::Sqids;
 
@@ -24,7 +24,7 @@ async fn main() {
         .await
         .unwrap();
     println!("The app is served at 127.0.0.1:3000");
-    let _ = axum::serve(listener, app).await;
+    let _ = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await;
     
     println!("Hello, world!");
 }

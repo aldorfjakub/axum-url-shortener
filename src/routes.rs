@@ -1,22 +1,21 @@
+use std::net::SocketAddr;
+
 use argon2::{
     Argon2,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
 use axum::{
     Json, Router,
-    extract::{Path, State},
-    http::StatusCode,
+    extract::{ConnectInfo, Path, State},
+    http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect},
     routing::{get, post},
 };
-use axum_extra::extract::{
-    PrivateCookieJar,
-    cookie::{Cookie},
-};
+use axum_extra::extract::{PrivateCookieJar, cookie::Cookie};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::models::AppState;
+use crate::models::{AppState, ClickRecord};
 
 async fn index() -> impl IntoResponse {
     Html(include_str!("../html/index.html"))
@@ -65,7 +64,13 @@ async fn link_creation_api(
             let argon2 = Argon2::default();
             let password_hash = argon2
                 .hash_password(pass.as_bytes(), &salt)
-                .unwrap()
+                .map_err(|e| -> (StatusCode, Json<serde_json::Value>) {
+                    println!("Error hashing password: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": "Failed to hash password." })),
+                    )
+                })?
                 .to_string();
             Some(password_hash)
         }
@@ -176,6 +181,8 @@ async fn link_redirect(
     State(state): State<AppState>,
     Path(short): Path<String>,
     jar: PrivateCookieJar,
+    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
     let result = sqlx::query!(
         "SELECT original_url, password_hash FROM links WHERE slug = ?",
@@ -211,15 +218,45 @@ async fn link_redirect(
             .into_response());
     }
 
+    // Log the click, refferer, user agent, ip address
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("Unknown");
+    let referrer = headers
+        .get("referer")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("Direct");
+    let ip_addr = addr.ip().to_string();
+
+    println!(
+        "Registered click for slug: {}, referrer: {}, user_agent: {}, ip: {}",
+        short, referrer, user_agent, ip_addr
+    );
+    let _ = sqlx::query!(
+        "INSERT INTO clicks (slug, referrer, user_agent, ip) VALUES (?, ?, ?, ?)",
+        short,
+        referrer,
+        user_agent,
+        ip_addr
+    )
+    .execute(&state.db)
+    .await;
+
     Ok(Redirect::to(&record.original_url).into_response())
 }
 
-async fn password_verify(
+async fn link_stats_page() -> impl IntoResponse {
+    Html(include_str!("../html/stats.html"))
+
+}
+
+async fn password_verify_api(
     State(state): State<AppState>,
     Path(short): Path<String>,
     jar: PrivateCookieJar,
     Json(payload): Json<PasswordVerifyRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> impl IntoResponse {
     let record = match sqlx::query!(
         "SELECT original_url, password_hash FROM links WHERE slug = ?",
         short
@@ -271,12 +308,45 @@ async fn password_verify(
     Ok((jar, Json(json!({ "success": true, "slug": short }))).into_response())
 }
 
+async fn link_stats_api(
+    State(state): State<AppState>,
+    Path(short): Path<String>,
+
+) -> impl IntoResponse {
+    match sqlx::query!("SELECT * FROM links WHERE slug = ?", short).fetch_one(&state.db).await {
+        Ok(_) => (),
+        Err(_) => {
+            return (StatusCode::NOT_FOUND, Json(json!({"error": "Short link not found."})));
+        }
+    }
+    let rows = match sqlx::query_as!(
+        ClickRecord,
+        "SELECT slug, referrer, user_agent, ip, created_at  FROM clicks WHERE slug = ? ORDER BY clicks.id DESC",
+        short
+    )
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Failed to fetch click stats." })),
+            );
+        }
+    };
+    
+
+    (StatusCode::OK, Json(json!(rows)))
+}
 pub fn app_routes(state: AppState) -> Router<()> {
     let api_routes = Router::new()
         .route("/", get(index))
         .route("/{short}", get(link_redirect))
-        .route("/{short}/verify", post(password_verify))
+        .route("/{short}/verify", post(password_verify_api))
+        .route("/{short}/stats", get(link_stats_page))
         .route("/api/shorten", post(link_creation_api))
+        .route("/api/stats/{short}", get(link_stats_api))
         .with_state(state);
 
     api_routes

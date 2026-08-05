@@ -1,0 +1,9 @@
+-- Add migration script here
+CREATE TABLE IF NOT EXISTS clicks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT NOT NULL REFERENCES links(slug) ON DELETE CASCADE,
+    referrer TEXT NOT NULL,
+    user_agent TEXT NOT NULL,
+    ip TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

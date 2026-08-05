@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Link Statistics</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card: #1e293b;
+            --border: #334155;
+            --text: #f8fafc;
+            --muted: #94a3b8;
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --error: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 2rem 1rem;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .card {
+            background-color: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            margin-top: 0;
+            margin-bottom: 0.25rem;
+        }
+
+        p.subtitle {
+            color: var(--muted);
+            font-size: 0.875rem;
+            margin-top: 0;
+            margin-bottom: 1.5rem;
+        }
+
+        .slug-badge {
+            display: inline-block;
+            background-color: rgba(37, 99, 235, 0.15);
+            border: 1px solid var(--primary);
+            color: var(--primary);
+            border-radius: 999px;
+            padding: 0.15rem 0.6rem;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .stat {
+            background-color: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1rem;
+        }
+
+        .stat .value {
+            font-size: 1.75rem;
+            font-weight: 700;
+            margin-bottom: 0.25rem;
+        }
+
+        .stat .label {
+            color: var(--muted);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+        }
+
+        th,
+        td {
+            text-align: left;
+            padding: 0.625rem 0.75rem;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+            word-break: break-word;
+        }
+
+        th {
+            color: var(--muted);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.7rem;
+            letter-spacing: 0.05em;
+        }
+
+        .empty {
+            text-align: center;
+            color: var(--muted);
+            padding: 2rem;
+        }
+
+        .message {
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            display: none;
+        }
+
+        .message.error {
+            background-color: rgba(239, 68, 68, 0.1);
+            border: 1px solid var(--error);
+            color: var(--error);
+        }
+
+        .back-link {
+            display: inline-block;
+            margin-bottom: 1rem;
+            color: var(--muted);
+            text-decoration: none;
+            font-size: 0.875rem;
+        }
+
+        .back-link:hover {
+            color: var(--text);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <a class="back-link" href="/">&larr; Back to URL Shortener</a>
+
+        <div class="card">
+            <h1>Link Statistics</h1>
+            <p class="subtitle">Click activity for slug <span class="slug-badge" id="slug-badge">&mdash;</span></p>
+
+            <div class="message error" id="error-message"></div>
+
+            <div id="stats-content" style="display: none;">
+                <div class="stats-grid">
+                    <div class="stat">
+                        <div class="value" id="total-clicks">0</div>
+                        <div class="label">Total Clicks</div>
+                    </div>
+                    <div class="stat">
+                        <div class="value" id="unique-referrers">0</div>
+                        <div class="label">Referrers</div>
+                    </div>
+                    <div class="stat">
+                        <div class="value" id="unique-agents">0</div>
+                        <div class="label">User Agents</div>
+                    </div>
+                    <div class="stat">
+                        <div class="value" id="unique-ips">0</div>
+                        <div class="label">Unique IPs</div>
+                    </div>
+                </div>
+
+                <table id="clicks-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Time</th>
+                            <th>Referrer</th>
+                            <th>User Agent</th>
+                            <th>IP Address</th>
+                        </tr>
+                    </thead>
+                    <tbody id="clicks-body"></tbody>
+                </table>
+                <div class="empty" id="empty-state" style="display: none;">
+                    No clicks recorded for this link yet.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const pathSegments = window.location.pathname.split('/').filter(Boolean);
+        const slug = pathSegments[pathSegments.length - 2];
+
+        const errorMessage = document.getElementById('error-message');
+        const statsContent = document.getElementById('stats-content');
+
+        const slugBadge = document.getElementById('slug-badge');
+        const emptyState = document.getElementById('empty-state');
+        const clicksTable = document.getElementById('clicks-table');
+        const clicksHeaders = clicksTable.querySelector('thead');
+        const clicksBody = document.getElementById('clicks-body');
+
+        function escapeHtml(value) {
+            return String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function formatTime(value) {
+            if (!value) return '&mdash;';
+            const date = new Date(value);
+            if (isNaN(date.getTime())) return escapeHtml(String(value).replace('T', ' '));
+            return date.toLocaleString();
+        }
+
+        function showError(message) {
+            statsContent.style.display = 'none';
+            errorMessage.textContent = message;
+            errorMessage.style.display = 'block';
+        }
+
+        function hideError() {
+            errorMessage.textContent = '';
+            errorMessage.style.display = 'none';
+        }
+
+        async function loadStats() {
+            if (!slug) {
+                showError('Invalid request path: no slug found.');
+                return;
+            }
+
+            slugBadge.textContent = slug;
+            hideError();
+            clicksBody.innerHTML = '';
+            emptyState.style.display = 'none';
+            clicksHeaders.style.display = '';
+
+            try {
+                const response = await fetch(`/api/stats/${encodeURIComponent(slug)}`);
+
+                if (!response.ok) {
+                    const data = await response.json().catch(() => ({}));
+                    const message = response.status === 404
+                        ? (data.error || 'Short link not found.')
+                        : (data.error || `Failed to load stats (status ${response.status}).`);
+                    showError(message);
+                    return;
+                }
+
+                const rows = await response.json();
+
+                statsContent.style.display = 'block';
+
+                document.getElementById('total-clicks').textContent = rows.length;
+
+                document.getElementById('unique-referrers').textContent =
+                    new Set(rows.map((r) => r.referrer)).size;
+                document.getElementById('unique-agents').textContent =
+                    new Set(rows.map((r) => r.user_agent)).size;
+                document.getElementById('unique-ips').textContent =
+                    new Set(rows.map((r) => r.ip)).size;
+
+                if (rows.length === 0) {
+                    emptyState.style.display = 'block';
+                    clicksHeaders.style.display = 'none';
+                    return;
+                }
+
+                clicksHeaders.style.display = '';
+                rows.forEach((row, index) => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${index + 1}</td>
+                        <td>${formatTime(row.created_at)}</td>
+                        <td>${escapeHtml(row.referrer) || '&mdash;'}</td>
+                        <td>${escapeHtml(row.user_agent) || '&mdash;'}</td>
+                        <td>${escapeHtml(row.ip) || '&mdash;'}</td>
+                    `;
+                    clicksBody.appendChild(tr);
+                });
+            } catch (err) {
+                showError('Network error. Could not reach the server.');
+            }
+        }
+
+        loadStats();
+    </script>
+</body>
+
+</html>
