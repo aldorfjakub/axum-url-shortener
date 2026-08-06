@@ -1,12 +1,12 @@
+use std::env;
 use sqlx::{Sqlite, SqlitePool, migrate::MigrateDatabase};
-
-const DB_URL: &str = "sqlite://sqlite.db";
 
 
 pub async fn initialize_database() -> SqlitePool {
-    if !Sqlite::database_exists(DB_URL).await.unwrap_or(false) {
-        println!("Creating database {}", DB_URL);
-        match Sqlite::create_database(DB_URL).await {
+    let db_url = env::var("DATABASE_URL").expect("DATABASE_URL not configured in .env file");
+    if !Sqlite::database_exists(&db_url).await.unwrap_or(false) {
+        println!("Creating database {}", &db_url);
+        match Sqlite::create_database(&db_url).await {
             Ok(_) => println!("Create db success"),
             Err(error) => panic!("error: {}", error),
         }
@@ -14,7 +14,7 @@ pub async fn initialize_database() -> SqlitePool {
         println!("Database already exists");
     }
 
-    let pool: SqlitePool = SqlitePool::connect(DB_URL).await.unwrap();
+    let pool: SqlitePool = SqlitePool::connect(&db_url).await.unwrap();
 
     sqlx::migrate!("./migrations").run(&pool).await.expect("Migrations has failed");
 
