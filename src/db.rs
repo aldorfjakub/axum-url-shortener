@@ -1,5 +1,5 @@
-use std::env;
-use sqlx::{Sqlite, SqlitePool, migrate::MigrateDatabase};
+use std::{env, str::FromStr, time::Duration};
+use sqlx::{Sqlite, SqlitePool, migrate::MigrateDatabase, sqlite::{SqliteConnectOptions, SqliteJournalMode}};
 
 
 pub async fn initialize_database() -> SqlitePool {
@@ -13,8 +13,12 @@ pub async fn initialize_database() -> SqlitePool {
     } else {
         println!("Database already exists");
     }
+    let opts = SqliteConnectOptions::from_str(&db_url).unwrap()
+    .journal_mode(SqliteJournalMode::Wal)
+    .busy_timeout(Duration::from_secs(5))
+    .foreign_keys(true);
 
-    let pool: SqlitePool = SqlitePool::connect(&db_url).await.unwrap();
+    let pool: SqlitePool = SqlitePool::connect_with(opts).await.unwrap();
 
     sqlx::migrate!("./migrations").run(&pool).await.expect("Migrations has failed");
 
