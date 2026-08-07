@@ -14,8 +14,10 @@ pub struct AppState(pub Arc<AppStateInner>);
 pub struct AppStateInner {
     pub db: SqlitePool,
     pub sqids: sqids::Sqids,
-    pub blocklist: HashSet<String>,
+    pub domain_blocklist: HashSet<String>,
+    pub slug_blocklist: HashSet<String>,
     pub cookie_key: Key,
+    pub admin_password: String
 }
 
 impl FromRef<AppState> for Key {

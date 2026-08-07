@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{env, net::SocketAddr, string};
 
 use argon2::{
     Argon2,
@@ -12,6 +12,7 @@ use axum::{
     routing::{get, post},
 };
 use axum_extra::extract::{PrivateCookieJar, cookie::Cookie};
+use constant_time_eq::constant_time_eq;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -51,7 +52,7 @@ async fn link_creation_api(
             Json(json!({ "error": "Invalid URL format." })),
         ));
     }
-    if state.blocklist.contains(&host.unwrap()) {
+    if state.domain_blocklist.contains(&host.unwrap()) {
         return Err((
             StatusCode::FORBIDDEN,
             Json(json!({ "error": "This URL is blocked." })),
@@ -98,6 +99,11 @@ async fn link_creation_api(
                     json!({ "error": "Custom slug can only contain alphanumeric characters and dashes." }),
                 ),
             ));
+        } else if state.slug_blocklist.contains(custom_slug) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "This custom slug is banned from using it." })),
+            ));
         }
 
         let _ = sqlx::query!(
@@ -125,31 +131,50 @@ async fn link_creation_api(
             Json(json!({ "error": "Failed to create short link." })),
         )
     })?;
+    let mut slug = String::new();
+    let mut slug_gen_attempts = 0;
 
-    let result = match sqlx::query!("INSERT INTO l_counter DEFAULT VALUES")
-        .execute(&mut *tx)
-        .await
-    {
-        Ok(res) => res,
-        Err(err) => {
-            println!("Error inserting into l_counter: {}", err);
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Failed to create short link." })),
-            ));
-        }
-    };
-    let inserted_id = result.last_insert_rowid();
-    let slug = match state.sqids.encode(&[inserted_id as u64]) {
-        Ok(s) => s,
-        Err(err) => {
-            println!("Error encoding slug: {}", err);
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Failed to create short link." })),
-            ));
-        }
-    };
+    // Give multiple attempts to generate correct slug
+    while slug.is_empty() {
+        let result = match sqlx::query!("INSERT INTO l_counter DEFAULT VALUES")
+            .execute(&mut *tx)
+            .await
+        {
+            Ok(res) => res,
+            Err(err) => {
+                println!("Error inserting into l_counter: {}", err);
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": "Failed to create short link." })),
+                ));
+            }
+        };
+        let inserted_id = result.last_insert_rowid();
+        slug = match state.sqids.encode(&[inserted_id as u64]) {
+            Ok(s) => {
+                slug_gen_attempts += 1;
+
+                if state.slug_blocklist.contains(&s) {
+                    String::new()
+                } else {
+                    s
+                }
+            }
+            Err(err) => {
+                println!("Error encoding slug: {}", err);
+                slug_gen_attempts += 1;
+                // Limit the attempts to prevent deadlock
+                if slug_gen_attempts > 5 {
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": "Failed to create short link." })),
+                    ));
+                } else {
+                    String::new()
+                }
+            }
+        };
+    }
     let _ = sqlx::query!(
         "INSERT INTO links (slug, original_url, password_hash) VALUES (?, ?, ?)",
         slug,
@@ -246,9 +271,21 @@ async fn link_redirect(
     Ok(Redirect::to(&record.original_url).into_response())
 }
 
-async fn link_stats_page() -> impl IntoResponse {
-    Html(include_str!("../html/stats.html"))
+async fn link_stats_page(jar: PrivateCookieJar) -> impl IntoResponse {
+    let authorized = match jar.get("admin") {
+        Some(cookie) => cookie
+            .value()
+            .parse::<i64>()
+            .map(|expiry| chrono::Utc::now().timestamp() < expiry)
+            .unwrap_or(false),
+        None => false,
+    };
 
+    if !authorized {
+        return Html(include_str!("../html/password-input-stats.html"));
+    }
+
+    Html(include_str!("../html/stats.html"))
 }
 
 async fn password_verify_api(
@@ -308,15 +345,61 @@ async fn password_verify_api(
     Ok((jar, Json(json!({ "success": true, "slug": short }))).into_response())
 }
 
+async fn admin_acces_verify_api(
+    State(state): State<AppState>,
+    jar: PrivateCookieJar,
+    Json(payload): Json<PasswordVerifyRequest>,
+) -> impl IntoResponse {
+    if constant_time_eq(&payload.password.into_bytes() , &state.admin_password.clone().into_bytes())
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "Invalid password"})),
+        ));
+    }
+    let expiry = chrono::Utc::now().timestamp() + 1800;
+    let cookie = Cookie::build(("admin", expiry.to_string()))
+        .path("/")
+        .http_only(true)
+        .secure(false)
+        .same_site(axum_extra::extract::cookie::SameSite::Strict)
+        .build();
+
+    let jar = jar.add(cookie);
+
+    Ok((jar, Json(json!({"success": true}))).into_response())
+}
+
 async fn link_stats_api(
     State(state): State<AppState>,
     Path(short): Path<String>,
-
+    jar: PrivateCookieJar,
 ) -> impl IntoResponse {
-    match sqlx::query!("SELECT * FROM links WHERE slug = ?", short).fetch_one(&state.db).await {
+    let authorized = match jar.get("admin") {
+        Some(cookie) => cookie
+            .value()
+            .parse::<i64>()
+            .map(|expiry| chrono::Utc::now().timestamp() < expiry)
+            .unwrap_or(false),
+        None => false,
+    };
+
+    if !authorized {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "Not authorized to view stats."})),
+        );
+    }
+    match sqlx::query!("SELECT * FROM links WHERE slug = ?", short)
+        .fetch_one(&state.db)
+        .await
+    {
         Ok(_) => (),
         Err(_) => {
-            return (StatusCode::NOT_FOUND, Json(json!({"error": "Short link not found."})));
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "Short link not found."})),
+            );
         }
     }
     let rows = match sqlx::query_as!(
@@ -335,7 +418,6 @@ async fn link_stats_api(
             );
         }
     };
-    
 
     (StatusCode::OK, Json(json!(rows)))
 }
@@ -346,6 +428,7 @@ pub fn app_routes(state: AppState) -> Router<()> {
         .route("/{short}/verify", post(password_verify_api))
         .route("/{short}/stats", get(link_stats_page))
         .route("/api/shorten", post(link_creation_api))
+        .route("/api/admin/verify", post(admin_acces_verify_api))
         .route("/api/stats/{short}", get(link_stats_api))
         .with_state(state);
 

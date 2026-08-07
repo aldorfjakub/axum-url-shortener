@@ -26,13 +26,29 @@ async fn main() {
         .build()
         .expect("Failed to create Sqids instance");
 
-    let blocklist_path = std::env::var("BLOCKLIST_PATH");
-    if blocklist_path.is_err() {
+    let domain_blocklist_path = std::env::var("DOMAIN_BLOCKLIST");
+    if domain_blocklist_path.is_err() {
         println!(
-            "BLOCKLIST_PATH is not configured, all target domains will be allowed. To configure a blocklist, set the BLOCKLIST_PATH environment variable to the path of a text file containing blocked domains."
+            "DOMAIN_BLOCKLIST is not configured, all target domains will be allowed. To configure a blocklist, set the DOMAIN_BLOCKLIST environment variable to the path of a text file containing blocked domains."
         );
     }
-    let blocklist: HashSet<String> = match blocklist_path {
+    let domain_blocklist: HashSet<String> = match domain_blocklist_path {
+        Ok(path) => std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|s| s.to_string())
+            .collect(),
+        Err(_) => HashSet::new(),
+    };
+
+    let slug_blocklist_path = std::env::var("SLUG_BLOCKLIST");
+    if slug_blocklist_path.is_err() {
+        println!(
+            "SLUG_BLOCKLIST is not configured, all slugs will be allowed. To configure a blocklist, set the SLUG_BLOCKLIST environment variable to the path of a text file containing blocked slugs."
+        );
+    }
+
+    let slug_blocklist: HashSet<String> = match slug_blocklist_path {
         Ok(path) => std::fs::read_to_string(path)
             .unwrap()
             .lines()
@@ -48,11 +64,14 @@ async fn main() {
 
     let cookie_key = Key::try_from(key_bytes.as_slice()).expect("COOKIE_SECRET decoded bytes must be at least 64 bytes long");
 
+    let admin_password= env::var("ADMIN_PASSWORD").expect("ADMIN_PASSWORD needs to be set in order to view link stats");
     let state = AppState(Arc::new(AppStateInner {
         db,
         sqids,
-        blocklist,
-        cookie_key
+        domain_blocklist,
+        slug_blocklist,
+        cookie_key,
+        admin_password
     }));
 
     let app = routes::app_routes(state);

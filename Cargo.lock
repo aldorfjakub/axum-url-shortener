@@ -168,6 +168,7 @@ dependencies = [
  "axum-extra",
  "base64 0.23.1",
  "chrono",
+ "constant_time_eq",
  "dotenvy",
  "serde",
  "serde_json",
@@ -305,6 +306,12 @@ name = "cmov"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
+
+[[package]]
+name = "constant_time_eq"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a1ec0cfec728a79a5109075543131387f911cb4d07716436d7ae20533657a96"
 
 [[package]]
 name = "cookie"
