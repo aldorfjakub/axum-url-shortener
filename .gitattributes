@@ -1,0 +1,5 @@
+# Embedded HTML/CSS/JS templates are served via include_str! and are part of
+# the Rust application, not standalone web code. Exclude them from GitHub's
+# language detection so the repo is correctly identified as Rust.
+html/* linguist-vendored
+data/*.txt linguist-vendored
