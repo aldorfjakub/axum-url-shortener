@@ -1,4 +1,4 @@
-use std::{env, net::SocketAddr, string};
+use std::net::SocketAddr;
 
 use argon2::{
     Argon2,
@@ -350,8 +350,10 @@ async fn admin_acces_verify_api(
     jar: PrivateCookieJar,
     Json(payload): Json<PasswordVerifyRequest>,
 ) -> impl IntoResponse {
-    if constant_time_eq(&payload.password.into_bytes() , &state.admin_password.clone().into_bytes())
-    {
+    if constant_time_eq(
+        &payload.password.into_bytes(),
+        &state.admin_password.clone().into_bytes(),
+    ) {
         return Err((
             StatusCode::FORBIDDEN,
             Json(json!({"error": "Invalid password"})),
@@ -421,6 +423,29 @@ async fn link_stats_api(
 
     (StatusCode::OK, Json(json!(rows)))
 }
+
+async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
+    let db_ok = sqlx::query("SELECT 1").execute(&state.db).await.is_ok();
+
+    if db_ok {
+        (
+            StatusCode::OK,
+            Json(json!({
+                "status": "ok",
+                "database": "up",
+            })),
+        )
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!( {
+                "status": "degraded",
+                "database": "down",
+            })),
+        )
+    }
+}
+
 pub fn app_routes(state: AppState) -> Router<()> {
     let api_routes = Router::new()
         .route("/", get(index))
@@ -430,6 +455,7 @@ pub fn app_routes(state: AppState) -> Router<()> {
         .route("/api/shorten", post(link_creation_api))
         .route("/api/admin/verify", post(admin_acces_verify_api))
         .route("/api/stats/{short}", get(link_stats_api))
+        .route("/health", get(health_check))
         .with_state(state);
 
     api_routes
