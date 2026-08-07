@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{env, net::SocketAddr};
 
 use argon2::{
     Argon2,
@@ -252,7 +252,13 @@ async fn link_redirect(
         .get("referer")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("Direct");
-    let ip_addr = addr.ip().to_string();
+    let ip_addr = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|x| x.split(',').next())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| addr.ip().to_string());
 
     println!(
         "Registered click for slug: {}, referrer: {}, user_agent: {}, ip: {}",
@@ -318,10 +324,11 @@ async fn password_verify_api(
     };
 
     let argon2 = Argon2::default();
-    let valid = argon2
+    let pass_hash = &PasswordHash::new(&hash);
+    let valid = pass_hash.is_ok() && argon2
         .verify_password(
             payload.password.as_bytes(),
-            &PasswordHash::new(&hash).unwrap(),
+            pass_hash.as_ref().unwrap(),
         )
         .is_ok();
 
@@ -337,7 +344,7 @@ async fn password_verify_api(
     let cookie = Cookie::build((short.clone(), expiry.to_string()))
         .path("/")
         .http_only(true)
-        .secure(false)
+        .secure(env::var("COOKIE_SECURE").unwrap_or("true".to_string()) == "true")
         .same_site(axum_extra::extract::cookie::SameSite::Strict)
         .build();
     let jar = jar.add(cookie);
@@ -350,7 +357,7 @@ async fn admin_acces_verify_api(
     jar: PrivateCookieJar,
     Json(payload): Json<PasswordVerifyRequest>,
 ) -> impl IntoResponse {
-    if constant_time_eq(
+    if !constant_time_eq(
         &payload.password.into_bytes(),
         &state.admin_password.clone().into_bytes(),
     ) {
@@ -363,7 +370,7 @@ async fn admin_acces_verify_api(
     let cookie = Cookie::build(("admin", expiry.to_string()))
         .path("/")
         .http_only(true)
-        .secure(false)
+        .secure(env::var("COOKIE_SECURE").unwrap_or("true".to_string()) == "true")
         .same_site(axum_extra::extract::cookie::SameSite::Strict)
         .build();
 
