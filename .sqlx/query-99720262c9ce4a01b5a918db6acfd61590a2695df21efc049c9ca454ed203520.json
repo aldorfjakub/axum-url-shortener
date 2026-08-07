@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO l_counter DEFAULT VALUES",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "99720262c9ce4a01b5a918db6acfd61590a2695df21efc049c9ca454ed203520"
+}

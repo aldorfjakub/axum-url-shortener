@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT original_url, password_hash FROM links WHERE slug = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "original_url",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "links",
+            "name": "original_url"
+          }
+        }
+      },
+      {
+        "name": "password_hash",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "links",
+            "name": "password_hash"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "54b78cfac9a5aa45bfa218b286a15641a888e2f7f60b6e5ceb8aee6805aff68e"
+}
